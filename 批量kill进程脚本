@@ -1,0 +1,18 @@
+#!/bin/bash
+# 批量杀掉多余进程脚本
+# 2022/06/30
+
+kill_id=`sudo ps aux | grep /etc/umbra/bin/umb-build-routes | awk '{print $2}'`
+echo $kill_id
+
+echo "---------------"
+
+for id in $kill_id
+do
+        kill -9 $id
+        echo "killed $id"
+done
+
+
+
+ps -ef | grep rtprecv | grep -v grep | awk '{print $2}' | xargs kill -9
