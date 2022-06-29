@@ -1,0 +1,342 @@
+#!/bin/bash
+# =========================================================================
+# NAME:		umb-multi-cons.sh
+#
+# AUTHOR:	Henry Yang
+# DATE:		2018/12/11
+# VERSION:	1.6
+#
+# DESCRIPTION:	Multi-cons start scripts.
+#
+# JIRA:		DEV-1264 
+#
+# COMMENTS:
+#	0.1	2018/09/18
+#		- Initialization it.
+#	0.2	2019/04/01
+#		- Add con rx and tx checking logic
+#
+# EXIT CODES:
+#	0	success
+# =========================================================================
+
+VERSION=3.0.7
+#########################################################
+# CONSTANTS
+NAME=$(basename $0 .sh)
+UMB_DIR=/etc/umbra
+
+if [[ $(whoami) != 'root' ]] ; then                     #
+        echo -e "\n\e[0;31m$NAME: you must have root rights, exiting...\e[0m\n"
+        exit 1                                          #
+fi                                                      #
+#########################################################
+
+# FUNCTIONS
+## Displays date/time and a message using umb_print
+function message() {
+        declare local _datetime _message _exit
+        _datetime=$(date '+%Y/%m/%d %H:%M:%S')
+        while [[ $# != 0 ]] ; do
+                case $1 in
+                '###ERR###')    _exit='exit 1'  ; shift ;;
+                *)              _message=$1     ; shift
+                esac
+        done
+        printf '%b\n' "[$_datetime]:[$NAME]: $_message"
+        $_exit
+        unset _datetime _message _exit
+}
+
+echo "$PATH" | grep -q /etc/umbra/bin || export PATH="$PATH:/etc/umbra/bin"
+echo "$PATH" | grep -q /etc/umbra/bin/wrappers || export PATH="$PATH:/etc/umbra/bin/wrappers"
+echo "$PATH" | grep -q /etc/umbra/scripts || export PATH="$PATH:/etc/umbra/scripts"
+CUR_PATH=$(pwd)
+echo "$PATH" | grep -q ${CUR_PATH} || export PATH="$PATH:${CUR_PATH}"
+
+UMB_DIR=/etc/umbra
+OVPN_DIR=${UMB_DIR}/confs/etc/openvpn
+IFACE_FILE_LIST=$(ls ${OVPN_DIR} | grep "^client_umb" | grep conf$)" "$(ls ${OVPN_DIR} | grep ^tun | grep conf$)" "$(ls ${OVPN_DIR} | grep ^con | grep conf$)
+GROUP_FILE=${UMB_DIR}/confs/etc/umbra/umb-multi-cons-groups.conf
+
+function iface_is_existing()
+{
+        declare local iface
+
+        iface=$1
+
+        for iface_file in $IFACE_FILE_LIST; do
+                if [[ ${iface_file%.*} ==  $iface ]]  ; then
+                        _iface=$(cat ${OVPN_DIR}/${iface_file} | grep '^dev ' | awk '{print $2}')
+                        if [[ $_iface == $iface ]] ; then
+                                return 0
+                        else
+                                echo -e "\n\e[0;31miface name[$_iface] did not match ${OVPN_DIR}/${iface_file}, exiting...\e[0m\n"
+                                return 1
+                        fi
+                fi
+        done
+
+        echo -e "\n\e[0;31mCan not found $iface config file in ${OVPN_DIR}, exiting...\e[0m\n"
+        return 1
+}
+
+GROUP_LIST=""
+IFACE_LIST=""
+DEFAULT_LIST=""
+IFACE_CHECK=""
+IFACE_STATUS=""
+i=0
+j=0
+k=0
+m=0
+l=0
+default_group_pos=10000
+while read line ; do
+        if [[ -z ${line} ]] ; then
+                continue;
+        fi
+        if [[ -n $(echo ${line} | grep ^#) ]] ; then
+                continue
+        fi
+
+        if [[ -n $(echo ${line} | grep '^groupcons') ]] || [[  -n $(echo ${line} | grep '^defaultgroup') ]] ; then
+                iface_name_list=$(echo $line)
+                iface_name_list=${iface_name_list#* }
+                for iface_name in ${iface_name_list} ; do
+                        if [[ $iface_name == tun0 ]] ; then
+                                if [[ -z $(echo -e ${IFACE_FILE_LIST} | grep client_umb) ]] ; then
+                                        echo -e "\n\e[0;31mtun0 is not existing. exit...\e[0m\n"
+                                        exit 0
+                                fi
+                        else
+                                if ! iface_is_existing $iface_name ; then
+                                        exit 0
+                                fi
+                        fi
+#                        if [[ -n $(echo ${IFACE_LIST[@]} | grep $iface_name) ]] ; then
+#                                echo "${iface_name} is overload. Exit..."
+#                                exit 0
+#                        fi
+                        IFACE_LIST[$i]=$iface_name
+                        ((i++))
+                done
+                if [[ -n $(echo ${line} | grep '^defaultgroup') ]] ; then
+                        default_group_pos=$j
+                fi
+                GROUP_LIST[$j]=$(echo $line)
+                ((j++))
+        elif [[ -n $(echo ${line} | grep ^default) ]] ; then
+                DEFAULT_LIST=$(echo $line)
+                iface_name_list=$(echo $line)
+                iface_name_list=${iface_name_list#* }
+                for iface_name in ${iface_name_list} ; do
+                        if ! iface_is_existing $iface_name ; then
+                                exit 0
+                        fi
+                done
+        elif [[ -n $(echo ${line} | grep ^log) ]] ; then
+                _group_name=$(echo $line | awk '{print $2}')
+                enable_log=$(echo $line | awk '{print $3}')
+                log_path=$(echo $line | awk '{print $5}')
+                log_path=${log_path%/*}
+                if [[ -n $log_path ]] && [[ ! -d $log_path ]] ; then
+                        mkdir -p $log_path
+                fi
+                if [[ $enable_log -eq 0 ]] ; then
+                        line="log $_group_name 0 10 /var/log/${_group_name}.log"
+                fi
+                TMP_LOG_LIST[$k]=$(echo $line | awk '{print $2" "$3" "$4" "$5}')
+                ((k++))
+        elif [[ -n $(echo ${line} | grep ^iface) ]] ; then
+                IFACE_CHECK[$m]=$(echo ${line} | awk '{print $2" "$3}')
+                ((m++))
+        elif [[ -n $(echo ${line} | grep ^con_status) ]] ; then
+                IFACE_STATUS[$l]=$(echo ${line} | awk '{print $2" "$3" "$4" "$5}')
+                ((l++))
+        fi
+done < ${GROUP_FILE}
+
+for ((i=0; i < ${#GROUP_LIST[@]}; i++)) ; do
+        group_name=$(echo ${GROUP_LIST[$i]} | awk '{print $1}')
+        j=0
+        for ((j=0; j < ${#TMP_LOG_LIST[@]}; j++)) ; do
+                _group_name=$(echo ${TMP_LOG_LIST[$j]} | awk '{print $1}')
+                if [[ $group_name == $_group_name ]] ; then
+                        LOG_LIST[$i]=${TMP_LOG_LIST[$j]}
+                        GROUP_LIST[$i]=${GROUP_LIST[$i]#* }
+                        break
+                fi
+        done
+        if [[ $j -eq  ${#TMP_LOG_LIST[@]} ]] ; then
+                echo -e "\n\e[0;31mDid not found $group_name log config. exit...\e[0m\n";
+                exit 0
+        fi
+done
+
+function get_con_status_arguments()
+{
+        declare local iface _iface i
+
+        iface=$1
+        for ((i=0; i < ${#IFACE_STATUS[@]}; i++)) ; do
+                _iface=$(echo ${IFACE_STATUS[$i]} | awk '{print $1}')
+                if [[ $_iface == $iface ]] ; then
+                        echo $(echo ${IFACE_STATUS[$i]} | awk '{print $2" "$3" "$4}')
+                        return 0
+                fi
+        done
+
+        echo "1024 1024 60"
+        unset iface _iface i
+}
+
+function stop_iface_monitor_proc()
+{
+        kill -9 $(ps aux|grep umb-con-status | awk '{print $2}') &> /dev/null
+}
+
+function get_check_URL()
+{
+        declare local iface _iface group_name _group_name i j
+
+        iface=$1
+        for ((i=0; i < ${#LOG_LIST[@]}; i++)) ; do
+                group_name=$(echo ${LOG_LIST[$i]} | awk '{print $1}')
+                for _iface in ${GROUP_LIST[$i]}  ; do
+                        if [[ $iface == ${_iface} ]] ; then
+                                for ((j=0; j < ${#IFACE_CHECK[@]}; j++)) ; do
+                                        _group_name=$(echo ${IFACE_CHECK[$j]} | awk '{print $1}')
+                                        if [[ $_group_name == $group_name ]] ; then
+                                                echo $(echo ${IFACE_CHECK[$j]} | awk '{print $2}')
+                                                return 0
+                                        fi
+                                done
+                        fi
+                done
+        done
+
+        unset local iface _iface group_name _group_name i j
+
+        return 1
+}
+
+function start_iface_monitor_proc()
+{
+        declare local file iface ret monitor_iface_bin monitor_iface_path monitor_iface_args monitor_iface_pid 
+
+    for file in $(echo ${IFACE_FILE_LIST}) ; do
+        iface=${file%*.conf}
+        if [[ $iface == client_umb ]] ; then
+            iface=tun0
+        fi
+        ret=$(get_check_URL $iface)
+        con_status_args=$(get_con_status_arguments $iface)
+        monitor_iface_bin=umb-con-status
+        monitor_iface_path=$(which ${monitor_iface_bin})
+        monitor_iface_args=${iface}" "$con_status_args" "$ret
+        monitor_iface_pid=/var/run/${monitor_iface_bin}_$(date +%s%N)
+        start-stop-daemon -bS --pid=$monitor_iface_pid --exec $monitor_iface_path -- $monitor_iface_args
+    done
+
+    unset local file iface ret monitor_iface_bin monitor_iface_path monitor_iface_args monitor_iface_pid
+}
+
+function group_mgr_start() 
+{
+        declare local k group_mgr_bin group_mgr_path group_mgr_args group_mgr_pid
+        
+        for((k=0;k<${#GROUP_LIST[@]};k++)) ; do
+                if [[ $k -ne $default_group_pos ]] ; then
+                        group_mgr_bin=umb-group-mgr
+                else
+                        group_mgr_bin=umb-def-grp-mgr
+                fi
+                group_mgr_path=$(which ${group_mgr_bin})
+                group_mgr_args=${LOG_LIST[$k]}" "${GROUP_LIST[$k]}" "${DEFAULT_LIST}
+                group_mgr_pid=/var/run/${group_mgr_bin}_$(date +%s%N)
+                start-stop-daemon -bS --pid=$group_mgr_pid --exec $group_mgr_path -- $group_mgr_args
+                sleep 1
+        done
+
+        unset k group_mgr_bin group_mgr_path group_mgr_args group_mgr_pid
+}
+
+function group_mgr_stop()
+{
+        kill -9 $(ps aux | grep umb-group-mgr | grep -v grep | awk '{print $2}') &> /dev/null
+        kill -9 $(ps aux | grep umb-def-grp-mgr | grep -v grep | awk '{print $2}') &> /dev/null
+}
+
+function bg_restart()
+{
+        declare local file iface
+
+        ## disabled the old openvpn network interfaces
+        if [[ -f /etc/umbra/confs/etc/openvpn/client_umb.conf ]] ; then
+                mv /etc/umbra/confs/etc/openvpn/client_umb.conf /etc/umbra/confs/etc/openvpn/client_umb.disabled
+        fi
+        for file in $(ls /etc/umbra/confs/etc/openvpn|grep ^tun | grep .conf$) ; do
+                iface=${file%.*}
+                mv /etc/umbra/confs/etc/openvpn/$file /etc/umbra/confs/etc/openvpn/${iface}.disabled
+        done
+
+        ## start openvpn network interfaces
+        /etc/umbra/scripts/services/openvpn restart
+        sleep 80
+
+        ## run cons status monitors
+        stop_iface_monitor_proc
+        start_iface_monitor_proc
+        sleep 5
+
+        ## run multi-cons manager
+        group_mgr_stop
+        group_mgr_start
+
+        unset file inface
+}
+
+if [[ ! -d /etc/umbra/registers/cons ]] ; then
+        mkdir -p /etc/umbra/registers/cons
+fi
+
+cmd=$1
+if [[ $cmd == "start" ]] ; then
+        start_iface_monitor_proc
+        sleep 5
+        group_mgr_start
+elif [[ $cmd == "stop" ]] ; then
+        stop_iface_monitor_proc
+        group_mgr_stop
+elif [[ $cmd == "restart" ]] ; then
+        stop_iface_monitor_proc
+        start_iface_monitor_proc
+        sleep 5
+        group_mgr_stop
+        group_mgr_start
+elif [[ $cmd == start_iface_status ]] ; then
+        start_iface_monitor_proc
+elif [[ $cmd == stop_iface_status ]] ; then
+        stop_iface_monitor_proc
+elif [[ $cmd == restart_iface_status ]] ; then
+        stop_iface_monitor_proc
+        start_iface_monitor_proc
+elif [[ $cmd == bg_restart ]] ; then
+        bg_restart & disown
+else
+        echo -e "$NAME"
+        echo -e "Version:$VERSION"
+        echo -e "Multi-cons master script."
+        echo -e "        OPTIONS ARGUMENTS"
+        echo -e "        start                       start multi-cons."
+        echo -e "        stop                        stop multi-cons."
+        echo -e "        restart                     restart multi-cons."
+        echo -e "        start_iface_status          start cons monitors."
+        echo -e "        stop_iface_status           stop cons monitors."
+        echo -e "        restart_iface_status        restart cons monitors."
+	echo -e "        bg_restart                  restart openpvn && restart multi-cons at background."
+fi
+
+exit 0
+
