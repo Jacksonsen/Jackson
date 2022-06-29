@@ -15,4 +15,4 @@ done
 
 
 
-ps -ef | grep rtprecv | grep -v grep | awk '{print $2}' | xargs kill -9
+# ps -ef | grep rtprecv | grep -v grep | awk '{print $2}' | xargs kill -9
