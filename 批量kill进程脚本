@@ -2,8 +2,6 @@
 # 批量杀掉多余进程脚本
 # 2022/06/30 - Jackson
 # /etc/umbra/bin/umb-build-routes 可以替换任何进程名
-## 我爱李香
-##  哇撒大撒大苏打
 
 
 kill_id=`sudo ps aux | grep /etc/umbra/bin/umb-build-routes | awk '{print $2}'`
