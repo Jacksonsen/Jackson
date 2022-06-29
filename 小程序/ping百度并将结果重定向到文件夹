@@ -1,0 +1,4 @@
+# 2022/06/30
+# 对百度进行ping，并将数据存放在文件里。
+
+ping www.baidu.com | while read pong; do echo "$(date): $pong"; done >/tmp/baidu.txt
